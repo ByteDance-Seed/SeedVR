@@ -139,6 +139,8 @@ If you encounter problems when installing apex from source, we provide two pre-b
 pip install apex-0.1-cp310-cp310-linux_x86_64.whl
 ```
 
+Note: in both pre-built wheels, the apex normalization extension (`fused_layer_norm_cuda`, used by `FusedRMSNorm` and `FusedLayerNorm`) only contains CUDA code for compute capability 9.0 (Hopper, e.g. H100). On GPUs below compute capability 9.0, such as A100 (8.0), RTX 4090 or L4 (8.9), these layers fail with `CUDA error: no kernel image is available for execution on the device`. On those GPUs, build apex from source following the [apex install instructions](https://github.com/NVIDIA/apex#linux), with `TORCH_CUDA_ARCH_LIST` set to your GPU (for example `TORCH_CUDA_ARCH_LIST="8.9"` on an RTX 4090 or L4).
+
 To use color fix, put the file [color_fix.py](https://github.com/pkuliyi2015/sd-webui-stablesr/blob/master/srmodule/colorfix.py) to `./projects/video_diffusion_sr/color_fix.py`.
 
 
