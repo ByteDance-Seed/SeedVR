@@ -80,6 +80,7 @@
       alt="SeedVR ComfyUI"
     />
   </a>
+  <a href="https://cloud.swmgpu.com/w/samofvaani/video-upscale-restore"><img src="https://img.shields.io/badge/swm%20cloud-Run%20SeedVR2%20ComfyUI-0F766E" alt="Run on swm cloud"/></a>
   <a href="http://arxiv.org/abs/2506.05301">
     <img
       src="https://img.shields.io/badge/SeedVR2-Paper-red?logo=arxiv&logoColor=red"
