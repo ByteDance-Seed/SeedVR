@@ -66,7 +66,7 @@ def is_image_file(filename):
     image_exts = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.webp'}
     return os.path.splitext(filename.lower())[1] in image_exts
 
-def configure_runner(sp_size):
+def configure_runner(sp_size, vae_tile=None):
     config_path = os.path.join('./configs_7b', 'main.yaml')
     config = load_config(config_path)
     runner = VideoDiffusionInfer(config)
@@ -75,7 +75,7 @@ def configure_runner(sp_size):
     init_torch(cudnn_benchmark=False, timeout=datetime.timedelta(seconds=3600))
     configure_sequence_parallel(sp_size)
     runner.configure_dit_model(device="cuda", checkpoint='./ckpts/seedvr_ema_7b.pth')
-    runner.configure_vae_model()
+    runner.configure_vae_model(tile=vae_tile)
     # Set memory limit.
     if hasattr(runner.vae, "set_memory_limit"):
         runner.vae.set_memory_limit(**runner.config.vae.memory_limit)
@@ -332,8 +332,13 @@ if __name__ == "__main__":
     parser.add_argument("--res_h", type=int, default=720)
     parser.add_argument("--res_w", type=int, default=1280)
     parser.add_argument("--sp_size", type=int, default=1)
+    parser.add_argument(
+        "--vae_tile", nargs=2, type=int, metavar=("SIZE", "OVERLAP"),
+        help="Enable spatial VAE tiling (size and overlap in pixels, e.g. 512 128).",
+    )
     parser.add_argument("--out_fps", type=float, default=None)
     args = parser.parse_args()
 
-    runner = configure_runner(args.sp_size)
-    generation_loop(runner, **vars(args))
+    generation_args = vars(args).copy()
+    runner = configure_runner(args.sp_size, generation_args.pop("vae_tile"))
+    generation_loop(runner, **generation_args)
