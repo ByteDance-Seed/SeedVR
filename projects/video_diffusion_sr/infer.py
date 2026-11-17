@@ -101,11 +101,13 @@ class VideoDiffusionInfer():
 
     @log_on_entry
     @log_runtime
-    def configure_vae_model(self):
+    def configure_vae_model(self, *, tile: Optional[Tuple[int, int]] = None):
         # Create vae model.
         dtype = getattr(torch, self.config.vae.dtype)
         self.vae = create_object(self.config.vae.model)
         self.vae.requires_grad_(False).eval()
+        if tile is not None:
+            self.vae.enable_tiling(tile_size=tile[0], tile_overlap=tile[1])
         self.vae.to(device=get_device(), dtype=dtype)
 
         # Load vae checkpoint.

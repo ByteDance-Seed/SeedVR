@@ -42,6 +42,7 @@ from models.video_vae_v3.modules.context_parallel_lib import (
     causal_conv_slice_inputs,
 )
 from models.video_vae_v3.modules.global_config import set_norm_limit
+from models.video_vae_v3.modules.spatial_tiling import spatial_tiled_forward
 from models.video_vae_v3.modules.types import (
     CausalAutoencoderOutput,
     CausalDecoderOutput,
@@ -1050,6 +1051,9 @@ class VideoAutoencoderKL(diffusers.AutoencoderKL):
     We simply inherit the model code from diffusers
     """
 
+    _tile_size = 512
+    _tile_overlap = 128
+
     def __init__(
         self,
         in_channels: int = 3,
@@ -1079,6 +1083,7 @@ class VideoAutoencoderKL(diffusers.AutoencoderKL):
         extra_cond_dim = kwargs.pop("extra_cond_dim") if "extra_cond_dim" in kwargs else None
         self.slicing_sample_min_size = slicing_sample_min_size
         self.slicing_latent_min_size = slicing_sample_min_size // (2**temporal_scale_num)
+        self._tile_spatial_factor = 2 ** (len(block_out_channels) - 1)
 
         super().__init__(
             in_channels=in_channels,
@@ -1165,7 +1170,7 @@ class VideoAutoencoderKL(diffusers.AutoencoderKL):
 
     @apply_forward_hook
     def encode(self, x: torch.FloatTensor, return_dict: bool = True) -> AutoencoderKLOutput:
-        h = self.slicing_encode(x)
+        h = self.tiled_encode(x) if self.use_tiling else self.slicing_encode(x)
         posterior = DiagonalGaussianDistribution(h)
 
         if not return_dict:
@@ -1177,7 +1182,7 @@ class VideoAutoencoderKL(diffusers.AutoencoderKL):
     def decode(
         self, z: torch.Tensor, return_dict: bool = True
     ) -> Union[DecoderOutput, torch.Tensor]:
-        decoded = self.slicing_decode(z)
+        decoded = self.tiled_decode(z) if self.use_tiling else self.slicing_decode(z)
 
         if not return_dict:
             return (decoded,)
@@ -1244,11 +1249,63 @@ class VideoAutoencoderKL(diffusers.AutoencoderKL):
         else:
             return self._decode(z)
 
-    def tiled_encode(self, x: torch.Tensor, **kwargs) -> torch.Tensor:
-        raise NotImplementedError
+    def enable_tiling(
+        self,
+        use_tiling: bool = True,
+        *,
+        tile_size: Optional[int] = None,
+        tile_overlap: Optional[int] = None,
+    ) -> None:
+        """Enable spatial VAE tiling for inference; sizes are in sample pixels."""
+        size = self._tile_size if tile_size is None else tile_size
+        overlap = self._tile_overlap if tile_overlap is None else tile_overlap
+        factor = self._tile_spatial_factor
+        if not (
+            isinstance(size, int)
+            and isinstance(overlap, int)
+            and 0 <= overlap < size
+            and size % factor == overlap % factor == 0
+        ):
+            raise ValueError(f"tile_size and tile_overlap must be multiples of {factor}, with 0 <= overlap < size.")
+        self._tile_size, self._tile_overlap = size, overlap
+        self.use_tiling = use_tiling
 
-    def tiled_decode(self, z: torch.Tensor, **kwargs) -> torch.Tensor:
-        raise NotImplementedError
+    def _run_spatial_tiles(self, x: torch.Tensor, *, encode: bool) -> torch.Tensor:
+        factor = self._tile_spatial_factor
+        input_scale, output_scale = (factor, 1) if encode else (1, factor)
+        size = self._tile_size // factor
+        forward = self.slicing_encode if encode else self.slicing_decode
+        if max(x.shape[-2:]) // input_scale <= size:
+            return forward(x)
+
+        network = self.encoder if encode else self.decoder
+        convolutions = [m for m in network.modules() if isinstance(m, InflatedCausalConv3d)]
+
+        def run_tile(tile):
+            # Slicing starts with INITIALIZING (or DISABLED) for each tile;
+            # temporal history carries over only within that tile.
+            try:
+                return forward(tile)
+            finally:
+                for conv in convolutions:
+                    conv.memory = None
+
+        return spatial_tiled_forward(
+            x,
+            run_tile,
+            size=size,
+            overlap=self._tile_overlap // factor,
+            input_scale=input_scale,
+            output_scale=output_scale,
+        )
+
+    def tiled_encode(self, x: torch.Tensor) -> torch.Tensor:
+        """Return the stitched posterior moments for a BCTHW sample."""
+        return self._run_spatial_tiles(x, encode=True)
+
+    def tiled_decode(self, z: torch.Tensor) -> torch.Tensor:
+        """Return the stitched BCTHW video for a latent."""
+        return self._run_spatial_tiles(z, encode=False)
 
     def forward(
         self, x: torch.FloatTensor, mode: Literal["encode", "decode", "all"] = "all", **kwargs
